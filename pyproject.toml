@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tabformer-embedder"
+version = "0.2.0"
+description = "TabFormer/nuFormer tabular embeddings with a scikit-learn-like .fit() API, designed for low-memory machines"
+requires-python = ">=3.8"
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.21",
+    "pandas>=1.3",
+]
+
+[tool.setuptools]
+packages = ["tabformer_embedder"]

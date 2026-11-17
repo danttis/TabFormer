@@ -1,0 +1,13 @@
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# training artifacts
+checkpoints/
+*.pt
+
+# cached preprocessed data
+data/*/preprocessed/
