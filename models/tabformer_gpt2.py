@@ -1,6 +1,9 @@
 from torch.nn import CrossEntropyLoss
 
-from transformers.modeling_gpt2 import GPT2LMHeadModel
+try:  # transformers >= 4.x
+    from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel
+except ImportError:  # transformers < 4.0 (e.g. 3.2.0 pinned in setup.yml)
+    from transformers.modeling_gpt2 import GPT2LMHeadModel
 
 
 class TabFormerGPT2LMHeadModel(GPT2LMHeadModel):
@@ -11,7 +14,7 @@ class TabFormerGPT2LMHeadModel(GPT2LMHeadModel):
     def forward(
             self,
             input_ids=None,
-            past=None,
+            past_key_values=None,
             attention_mask=None,
             token_type_ids=None,
             position_ids=None,
@@ -19,14 +22,15 @@ class TabFormerGPT2LMHeadModel(GPT2LMHeadModel):
             inputs_embeds=None,
             labels=None,
             use_cache=True,
+            **kwargs,
     ):
         transformer_outputs = self.transformer(
             input_ids,
-            past=past,
+            past_key_values=past_key_values,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
-            head_mask=head_mask,
+            # head_mask was removed in newer transformers; not forwarded
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
         )

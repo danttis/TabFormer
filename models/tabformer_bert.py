@@ -2,9 +2,21 @@ import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
 
-from transformers.modeling_bert import ACT2FN, BertLayerNorm
-from transformers.modeling_bert import BertForMaskedLM
-from transformers.configuration_bert import BertConfig
+from transformers import BertConfig
+
+try:  # transformers >= 4.x moved model internals to transformers.models.*
+    from transformers.models.bert.modeling_bert import ACT2FN, BertForMaskedLM
+except ImportError:  # transformers < 4.0 (e.g. 3.2.0 pinned in setup.yml)
+    from transformers.modeling_bert import ACT2FN, BertForMaskedLM
+
+try:
+    from transformers.models.bert.modeling_bert import BertLayerNorm
+except ImportError:
+    try:
+        from transformers.modeling_bert import BertLayerNorm
+    except ImportError:  # removed in transformers >= 4: use nn.LayerNorm
+        BertLayerNorm = nn.LayerNorm
+
 from models.custom_criterion import CustomAdaptiveLogSoftmax
 
 
@@ -89,17 +101,22 @@ class TabFormerBertForMaskedLM(BertForMaskedLM):
             position_ids=None,
             head_mask=None,
             inputs_embeds=None,
-            masked_lm_labels=None,
+            labels=None,  # renamed from masked_lm_labels in transformers >= 3.5
             encoder_hidden_states=None,
             encoder_attention_mask=None,
-            lm_labels=None,
+            masked_lm_labels=None,
+            **kwargs,
     ):
+        # backward compatibility with the old keyword
+        if labels is None:
+            labels = masked_lm_labels
+
         outputs = self.bert(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
-            head_mask=head_mask,
+            # head_mask was removed in newer transformers; not forwarded
             inputs_embeds=inputs_embeds,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,
@@ -111,14 +128,14 @@ class TabFormerBertForMaskedLM(BertForMaskedLM):
             output_sz = list(sequence_output.size())
             expected_sz = [output_sz[0], output_sz[1]*self.config.ncols, -1]
             sequence_output = sequence_output.view(expected_sz)
-            masked_lm_labels = masked_lm_labels.view(expected_sz[0], -1)
+            labels = labels.view(expected_sz[0], -1)
 
         prediction_scores = self.cls(sequence_output) # [bsz * seqlen * vocab_sz]
 
         outputs = (prediction_scores,) + outputs[2:]
 
         # prediction_scores : [bsz x seqlen x vsz]
-        # masked_lm_labels  : [bsz x seqlen]
+        # labels            : [bsz x seqlen]
 
         total_masked_lm_loss = 0
 
@@ -131,15 +148,20 @@ class TabFormerBertForMaskedLM(BertForMaskedLM):
             global_ids_field = self.vocab.get_field_ids(field_name)
 
             prediction_scores_field = prediction_scores[:, col_ids, :][:, :, global_ids_field]  # bsz * 10 * K
-            masked_lm_labels_field = masked_lm_labels[:, col_ids]
-            masked_lm_labels_field_local = self.vocab.get_from_global_ids(global_ids=masked_lm_labels_field,
-                                                                          what_to_get='local_ids')
+            labels_field = labels[:, col_ids]
+            labels_field_local = self.vocab.get_from_global_ids(global_ids=labels_field,
+                                                                what_to_get='local_ids')
+
+            # guard: a field with no masked position in the batch would make
+            # the mean cross-entropy NaN (all targets are ignore_index -100)
+            if (labels_field_local != -100).sum() == 0:
+                continue
 
             nfeas = len(global_ids_field)
             loss_fct = self.get_criterion(field_name, nfeas, prediction_scores.device)
 
             masked_lm_loss_field = loss_fct(prediction_scores_field.view(-1, len(global_ids_field)),
-                                            masked_lm_labels_field_local.view(-1))
+                                            labels_field_local.view(-1))
 
             total_masked_lm_loss += masked_lm_loss_field
 
@@ -182,7 +204,7 @@ class TabFormerBertModel(BertForMaskedLM):
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
-            head_mask=head_mask,
+            # head_mask was removed in newer transformers; not forwarded
             inputs_embeds=inputs_embeds,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,

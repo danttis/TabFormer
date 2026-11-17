@@ -81,7 +81,13 @@ class TabFormerGPT2:
     def __init__(self, special_tokens, vocab, field_ce=False, flatten=False):
 
         self.vocab = vocab
-        self.config = GPT2Config(vocab_size=len(self.vocab))
+        # point bos/eos at the special-token ids of the data vocabulary
+        # (GPT2's defaults are out of range and only trigger warnings)
+        self.config = GPT2Config(
+            vocab_size=len(self.vocab),
+            bos_token_id=self.vocab.get_id(self.vocab.bos_token, special_token=True),
+            eos_token_id=self.vocab.get_id(self.vocab.eos_token, special_token=True),
+        )
 
         self.tokenizer = TabFormerTokenizer(
             unk_token=special_tokens.unk_token,

@@ -100,9 +100,10 @@ class TransactionDataset(Dataset):
     @staticmethod
     def timeEncoder(X):
         X_hm = X['Time'].str.split(':', expand=True)
-        d = pd.to_datetime(dict(year=X['Year'], month=X['Month'], day=X['Day'], hour=X_hm[0], minute=X_hm[1])).astype(
-            int)
-        return pd.DataFrame(d)
+        d = pd.to_datetime(dict(year=X['Year'], month=X['Month'], day=X['Day'], hour=X_hm[0], minute=X_hm[1]))
+        # astype(int) on datetime64 was removed in newer pandas: convert via numpy
+        ints = d.to_numpy(dtype="datetime64[ns]").astype("int64")
+        return pd.DataFrame(ints, index=d.index)
 
     @staticmethod
     def amountEncoder(X):

@@ -108,14 +108,9 @@ def main(args):
     training_args = TrainingArguments(
         output_dir=args.output_dir,  # output directory
         num_train_epochs=args.num_train_epochs,  # total number of training epochs
-        logging_dir=args.log_dir,  # directory for storing logs
         save_steps=args.save_steps,
         do_train=args.do_train,
-        # do_eval=args.do_eval,
-        # evaluation_strategy="epoch",
         prediction_loss_only=True,
-        overwrite_output_dir=True,
-        # eval_steps=10000
     )
 
     trainer = Trainer(
@@ -131,7 +126,11 @@ def main(args):
     else:
         model_path = args.output_dir
 
-    trainer.train(model_path=model_path)
+    # `model_path` was removed from Trainer.train in transformers >= 4
+    try:
+        trainer.train(resume_from_checkpoint=model_path if args.checkpoint else None)
+    except TypeError:  # transformers 3.2.0 signature
+        trainer.train(model_path=model_path)
 
 
 if __name__ == "__main__":

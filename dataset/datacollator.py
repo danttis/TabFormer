@@ -13,12 +13,34 @@ class TransDataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
         if self.mlm:
             batch = batch.view(sz[0], -1)
             inputs, labels = self.mask_tokens(batch)
-            return {"input_ids": inputs.view(sz), "masked_lm_labels": labels.view(sz)}
+            return {"input_ids": inputs.view(sz), "labels": labels.view(sz)}
         else:
             labels = batch.clone().detach()
             if self.tokenizer.pad_token_id is not None:
                 labels[labels == self.tokenizer.pad_token_id] = -100
             return {"input_ids": batch, "labels": labels}
+
+    def _tensorize_batch(self, examples):
+        """Local replacement of the private helper removed from newer
+        transformers (was `_tensorize_batch`, now `_torch_collate_batch`)."""
+        if isinstance(examples[0], (list, tuple)):
+            examples = [torch.tensor(e, dtype=torch.long) for e in examples]
+        elif isinstance(examples[0], torch.Tensor):
+            examples = [e.long() for e in examples]
+        else:
+            raise ValueError(f"unsupported example type: {type(examples[0])}")
+
+        if not all(x.size(0) == examples[0].size(0) for x in examples):
+            if self.tokenizer.pad_token_id is None:
+                raise ValueError("examples have different lengths and the "
+                                 "tokenizer has no pad token")
+            max_len = max(x.size(0) for x in examples)
+            pad_id = self.tokenizer.pad_token_id
+            examples = [
+                torch.cat([x, torch.full((max_len - x.size(0),), pad_id, dtype=torch.long)])
+                for x in examples
+            ]
+        return torch.stack(examples, dim=0)
 
     def mask_tokens(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -37,13 +59,13 @@ class TransDataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
             self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
         ]
         probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
-        if self.tokenizer._pad_token is not None:
+        if self.tokenizer.pad_token_id is not None:
             padding_mask = labels.eq(self.tokenizer.pad_token_id)
             probability_matrix.masked_fill_(padding_mask, value=0.0)
         masked_indices = torch.bernoulli(probability_matrix).bool()
         labels[~masked_indices] = -100  # We only compute loss on masked tokens
 
-        # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
+        # 80% of the time, we replace masked input tokens with tokenizer.mask token
         indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
         inputs[indices_replaced] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
 
