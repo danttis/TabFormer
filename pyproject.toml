@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabformer-embedder"
-version = "0.2.0"
+version = "0.2.1"
 description = "TabFormer/nuFormer tabular embeddings with a scikit-learn-like .fit() API, designed for low-memory machines"
 requires-python = ">=3.8"
 dependencies = [

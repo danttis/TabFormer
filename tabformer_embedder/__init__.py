@@ -18,6 +18,6 @@ from .embedder import TabFormerEmbedder
 from .model import TabFormerModel, NuFormerModel
 from .vocab import PAD_ID, MASK_ID, UNK_ID, SEP_ID
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = ["TabFormerEmbedder", "TabFormerModel", "NuFormerModel",
            "PAD_ID", "MASK_ID", "UNK_ID", "SEP_ID"]
