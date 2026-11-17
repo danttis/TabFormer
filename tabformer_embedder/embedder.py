@@ -323,8 +323,19 @@ class TabFormerEmbedder:
 
         opt = torch.optim.AdamW(model.parameters(), lr=self.lr,
                                 weight_decay=self.weight_decay)
-        scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
+
+        # AMP without GradScaler: the chunked loss backprops internally
+        # (bounded memory), which is incompatible with scaler.scale().
+        # - CUDA + bfloat16: autocast bf16, no loss scaling needed;
+        # - CUDA + fp16 only: autocast fp16 with manual loss scaling
+        #   (overflow check + halve, growth policy like GradScaler);
+        # - CPU: plain fp32.
         use_amp = device.type == "cuda"
+        bf16 = bool(use_amp and torch.cuda.is_bf16_supported())
+        amp_dtype = torch.bfloat16 if bf16 else torch.float16
+        loss_scale = 1.0 if (not use_amp or bf16) else float(2 ** 16)
+        train_params = [p for p in model.parameters() if p.requires_grad]
+        n_steps_since_growth = 0
 
         best_val = float("inf")
         best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
@@ -341,21 +352,43 @@ class TabFormerEmbedder:
 
             for sel, batch in batch_iterator(windows, train_idx, self.batch_size):
                 x = self._view(batch, device)
-                with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                with torch.amp.autocast(device_type=device.type,
+                                         dtype=amp_dtype, enabled=use_amp):
                     # the model's loss backprops internally with the AMP
-                    # scale (and grad-accum divisor) already folded in
+                    # loss scale (and grad-accum divisor) already folded in
                     loss = model.training_loss(
-                        x, scale=scaler.get_scale() / self.grad_accum)
+                        x, scale=loss_scale / self.grad_accum)
                 running += float(loss)
                 n_steps += 1
                 accum += 1
-                if accum == self.grad_accum:
-                    scaler.unscale_(opt)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    scaler.step(opt)
-                    scaler.update()
-                    opt.zero_grad(set_to_none=True)
-                    accum = 0
+                if accum < self.grad_accum:
+                    continue
+
+                # ---- optimizer step boundary ----
+                if loss_scale != 1.0:
+                    grads_finite = all(
+                        p.grad is None or bool(torch.isfinite(p.grad).all())
+                        for p in train_params
+                    )
+                    if not grads_finite:  # fp16 overflow: skip & halve
+                        loss_scale = max(loss_scale / 2.0, 1.0)
+                        n_steps_since_growth = 0
+                        opt.zero_grad(set_to_none=True)
+                        accum = 0
+                        continue
+                    inv = 1.0 / loss_scale  # unscale before clip/step
+                    for p in train_params:
+                        if p.grad is not None:
+                            p.grad.mul_(inv)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step()
+                opt.zero_grad(set_to_none=True)
+                accum = 0
+                if use_amp and not bf16 and loss_scale < 2 ** 16:
+                    n_steps_since_growth += 1
+                    if n_steps_since_growth >= 2000:  # GradScaler-like growth
+                        loss_scale *= 2.0
+                        n_steps_since_growth = 0
 
             val_loss = self._validate(model, windows, val_idx, device)
             self.history_.append({"epoch": epoch + 1,
